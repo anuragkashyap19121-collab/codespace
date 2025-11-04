@@ -22,7 +22,8 @@
   <div class="container">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h3 id="workspace-name"></h3>
-      <div>
+      <div class="btn-group">
+        <button id="copyBtn" class="btn btn-outline-primary btn-sm">📋 Copy</button>
         <button id="lockBtn" class="btn btn-outline-danger btn-sm">🔒 Lock</button>
         <button id="unlockBtn" class="btn btn-outline-success btn-sm" style="display:none;">🔓 Unlock</button>
       </div>
@@ -51,8 +52,8 @@
         lineNumbers: true, mode: "python", theme: "default", lineWrapping: true
       });
 
-      function showToast(msg = "Code Saved ✅") {
-        $("#toast").text(msg).stop(true, true).fadeIn(200).delay(1000).fadeOut(400);
+      function showToast(msg = "Code Saved ✅", color = "#198754") {
+        $("#toast").css("background", color).text(msg).stop(true, true).fadeIn(200).delay(1000).fadeOut(400);
       }
 
       // Load workspace data
@@ -72,6 +73,16 @@
           }
         });
       }
+
+      // Copy button
+      $("#copyBtn").click(() => {
+        const code = editor.getValue();
+        navigator.clipboard.writeText(code).then(() => {
+          showToast("📋 Code copied!", "#0d6efd");
+        }).catch(() => {
+          showToast("❌ Copy failed", "#dc3545");
+        });
+      });
 
       // Unlock workspace
       $("#unlockBtn").click(() => {
@@ -132,7 +143,7 @@
           contentType: "application/json",
           data: JSON.stringify({ password }),
           success: function () {
-            showToast("🔒 Workspace Locked");
+            showToast("🔒 Workspace Locked", "#dc3545");
             $("#lockForm").slideUp();
             locked = true;
             editor.setOption("readOnly", true);

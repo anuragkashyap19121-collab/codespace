@@ -1,23 +1,27 @@
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, redirect, url_for
 from flask_cors import CORS
 import sqlite3
 import os
 import random
 import string
 
+# --------------------------------------------
+# APP SETUP
+# --------------------------------------------
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "supersecret"
 CORS(app)
 
 DB_FILE = "database.db"
 
-# ----------------------------
-# Database Setup
-# ----------------------------
+
+# --------------------------------------------
+# DATABASE SETUP
+# --------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""
+    c.execute('''
         CREATE TABLE IF NOT EXISTS workspaces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE,
@@ -25,13 +29,11 @@ def init_db():
             locked INTEGER DEFAULT 0,
             password TEXT DEFAULT ''
         )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
-# ----------------------------
-# Helper
-# ----------------------------
+
 def get_workspace(name):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -40,20 +42,40 @@ def get_workspace(name):
     conn.close()
     return ws
 
-def generate_random_text():
-    # default random starter code/text
-    sample_snippets = [
-        "print('Hello, World!')",
-        "# Welcome to your new workspace!",
-        "def greet(name):\n    return f'Hello {name}'",
-        "// Write your awesome code here!",
-        "<!-- HTML Template -->\n<h1>Welcome!</h1>"
-    ]
-    return random.choice(sample_snippets)
 
-# ----------------------------
-# API Routes
-# ----------------------------
+# --------------------------------------------
+# ROUTES
+# --------------------------------------------
+
+@app.route("/")
+def home():
+    """Redirects to a new random workspace."""
+    new_name = "code" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    # Auto-create workspace entry in DB
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO workspaces (name) VALUES (?)", (new_name,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("workspace_page", name=new_name))
+
+
+@app.route("/<name>")
+def workspace_page(name):
+    """Renders the workspace page for a given name."""
+    ws = get_workspace(name)
+    if not ws:
+        # Auto-create workspace if not found
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO workspaces (name) VALUES (?)", (name,))
+        conn.commit()
+        conn.close()
+    return render_template("index.html", workspace_name=name)
+
+
+# ------------- API ----------------
+
 @app.route("/api/<name>", methods=["GET", "POST"])
 def workspace_api(name):
     conn = sqlite3.connect(DB_FILE)
@@ -62,12 +84,10 @@ def workspace_api(name):
     if request.method == "GET":
         ws = get_workspace(name)
         if not ws:
-            # auto-create new workspace
-            default_code = generate_random_text()
-            c.execute("INSERT INTO workspaces (name, content) VALUES (?, ?)", (name, default_code))
+            c.execute("INSERT INTO workspaces (name) VALUES (?)", (name,))
             conn.commit()
             conn.close()
-            return jsonify({"workspace_name": name, "code": default_code, "locked": False})
+            return jsonify({"workspace_name": name, "code": "", "locked": False})
 
         conn.close()
         return jsonify({
@@ -88,6 +108,7 @@ def workspace_api(name):
         conn.close()
         return jsonify({"status": "saved"})
 
+
 @app.route("/api/<name>/lock", methods=["POST"])
 def lock_workspace(name):
     data = request.get_json()
@@ -98,6 +119,7 @@ def lock_workspace(name):
     conn.commit()
     conn.close()
     return jsonify({"status": "locked"})
+
 
 @app.route("/api/<name>/unlock", methods=["POST"])
 def unlock_workspace(name):
@@ -118,27 +140,15 @@ def unlock_workspace(name):
     else:
         return jsonify({"error": "Invalid password"}), 401
 
+
 @app.route("/api/test")
 def test():
     return jsonify({"message": "SQLite working!"})
 
-# ----------------------------
-# Workspace Page Routes
-# ----------------------------
-@app.route("/")
-def home():
-    # redirect or render default workspace page
-    random_name = ''.join(random.choices(string.ascii_lowercase, k=6))
-    return render_template("index.html", workspace_name=random_name)
 
-@app.route("/<name>")
-def workspace_page(name):
-    # always render index.html for any workspace route
-    return render_template("index.html", workspace_name=name)
-
-# ----------------------------
-# Main
-# ----------------------------
+# --------------------------------------------
+# MAIN ENTRY POINT
+# --------------------------------------------
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 5000))

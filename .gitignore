@@ -1,8 +1,6 @@
+# Ignore environment and IDE files
+venv/
 .env
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-instance/
-.pytest_cache/
-.vscode/
+.idea/

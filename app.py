@@ -1,135 +1,146 @@
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
-from pymongo import MongoClient
-from werkzeug.security import generate_password_hash, check_password_hash
-from dotenv import load_dotenv
-from datetime import datetime
+import sqlite3
 import os
 
-load_dotenv()
-
+# --------------------------------------------
+# APP SETUP
+# --------------------------------------------
 app = Flask(__name__, template_folder="templates")
 app.secret_key = "supersecret"
 CORS(app)
 
-mongo_uri = os.getenv("MONGO_URI")
-client = MongoClient(mongo_uri)
-db = client["code_notepad"]
-workspaces = db["workspaces"]
+DB_FILE = "database.db"
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # fallback
 
-# ----------------------------
-# 🔐 Workspace CRUD & Lock API
-# ----------------------------
-@app.route('/api/<workspace_name>', methods=['GET', 'POST'])
-def handle_workspace(workspace_name):
-    workspace = workspaces.find_one({"workspace_name": workspace_name})
-    is_admin = session.get("is_admin", False)
-
-    if request.method == 'GET':
-        if not workspace:
-            return jsonify({"workspace_name": workspace_name, "code": "", "locked": False})
-        if workspace.get("locked") and not is_admin:
-            return jsonify({"locked": True})
-        return jsonify({
-            "workspace_name": workspace["workspace_name"],
-            "code": workspace.get("code", ""),
-            "locked": workspace.get("locked", False)
-        })
-
-    if request.method == 'POST':
-        data = request.get_json()
-        workspaces.update_one(
-            {"workspace_name": workspace_name},
-            {"$set": {
-                "code": data.get("code", ""),
-                "last_updated": datetime.utcnow()
-            }},
-            upsert=True
+# --------------------------------------------
+# DATABASE SETUP
+# --------------------------------------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            content TEXT DEFAULT '',
+            locked INTEGER DEFAULT 0,
+            password TEXT DEFAULT ''
         )
-        return jsonify({"status": "saved"})
+    ''')
+    conn.commit()
+    conn.close()
 
 
-# ----------------------------
-# 🔒 Lock / Unlock Endpoints
-# ----------------------------
-@app.route('/api/<workspace_name>/lock', methods=['POST'])
-def lock_workspace(workspace_name):
+# --------------------------------------------
+# ROUTES
+# --------------------------------------------
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/workspaces", methods=["GET"])
+def get_workspaces():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, name, locked FROM workspaces")
+    rows = c.fetchall()
+    conn.close()
+    workspaces = [{"id": row[0], "name": row[1], "locked": bool(row[2])} for row in rows]
+    return jsonify(workspaces)
+
+
+@app.route("/api/workspaces/<int:ws_id>", methods=["GET"])
+def get_workspace(ws_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, name, content, locked FROM workspaces WHERE id=?", (ws_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Workspace not found"}), 404
+    return jsonify({
+        "id": row[0],
+        "name": row[1],
+        "content": row[2],
+        "locked": bool(row[3])
+    })
+
+
+@app.route("/api/workspaces", methods=["POST"])
+def create_workspace():
     data = request.get_json()
-    password = data.get("password")
-    if not password:
-        return jsonify({"error": "Password required"}), 400
+    name = data.get("name", "Untitled")
+    password = data.get("password", "")
 
-    hashed_pw = generate_password_hash(password)
-    workspaces.update_one(
-        {"workspace_name": workspace_name},
-        {"$set": {"locked": True, "password": hashed_pw}},
-        upsert=True
-    )
-    return jsonify({"status": "locked"})
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO workspaces (name, password) VALUES (?, ?)", (name, password))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Workspace created"}), 201
 
 
-@app.route('/api/<workspace_name>/unlock', methods=['POST'])
-def unlock_workspace(workspace_name):
+@app.route("/api/workspaces/<int:ws_id>", methods=["PUT"])
+def update_workspace(ws_id):
     data = request.get_json()
-    password = data.get("password")
-    is_admin = session.get("is_admin", False)
-    ws = workspaces.find_one({"workspace_name": workspace_name})
+    content = data.get("content", "")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE workspaces SET content=? WHERE id=?", (content, ws_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Workspace updated"})
 
-    if not ws:
+
+@app.route("/api/workspaces/<int:ws_id>/lock", methods=["POST"])
+def lock_workspace(ws_id):
+    data = request.get_json()
+    password = data.get("password", "")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE workspaces SET locked=1, password=? WHERE id=?", (password, ws_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Workspace locked"})
+
+
+@app.route("/api/workspaces/<int:ws_id>/unlock", methods=["POST"])
+def unlock_workspace(ws_id):
+    data = request.get_json()
+    password = data.get("password", "")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT password FROM workspaces WHERE id=?", (ws_id,))
+    row = c.fetchone()
+
+    if not row:
         return jsonify({"error": "Workspace not found"}), 404
 
-    if is_admin:
-        return jsonify({"status": "unlocked", "code": ws.get("code", "")})
-
-    if ws.get("password") and check_password_hash(ws["password"], password):
-        workspaces.update_one({"workspace_name": workspace_name}, {"$set": {"locked": False}})
-        return jsonify({"status": "unlocked", "code": ws.get("code", "")})
+    correct_password = row[0]
+    if correct_password == password:
+        c.execute("UPDATE workspaces SET locked=0 WHERE id=?", (ws_id,))
+        conn.commit()
+        message = "Workspace unlocked"
     else:
-        return jsonify({"error": "Invalid password"}), 401
+        message = "Incorrect password"
+    conn.close()
+
+    return jsonify({"message": message})
 
 
-# ----------------------------
-# 🧭 Admin Routes
-# ----------------------------
-@app.route('/admin/login', methods=['GET', 'POST'])
-def admin_login():
-    if request.method == 'POST':
-        password = request.form.get("password")
-        if password == ADMIN_PASSWORD:
-            session['is_admin'] = True
-            return redirect(url_for('secure_workspaces'))
-        return render_template("admin_login.html", error="Invalid password")
-    return render_template("admin_login.html")
+@app.route("/api/test", methods=["GET"])
+def test():
+    return jsonify({"message": "SQLite connection OK!"})
 
 
-@app.route('/admin')
-def secure_workspaces():
-    if not session.get("is_admin"):
-        return redirect(url_for('admin_login'))
-    all_ws = list(workspaces.find({}, {"workspace_name": 1, "_id": 0, "locked": 1}))
-    for ws in all_ws:
-        ws["locked"] = ws.get("locked", False)
-    return render_template("workspaces.html", workspaces=all_ws)
-
-
-@app.route('/admin/logout')
-def admin_logout():
-    session.pop("is_admin", None)
-    return redirect(url_for('admin_login'))
-
-
-# ----------------------------
-# 🧩 Editor Route
-# ----------------------------
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_editor(path):
-    return render_template('index.html')
-
-
+# --------------------------------------------
+# MAIN ENTRY POINT
+# --------------------------------------------
 if __name__ == "__main__":
+    init_db()
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+    app.run(host="0.0.0.0", port=port, debug=True)

@@ -4,7 +4,7 @@ import sqlite3
 import os
 import random
 import string
-
+from flask import session
 # --------------------------------------------
 # APP SETUP
 # --------------------------------------------
@@ -46,6 +46,46 @@ def get_workspace(name):
 # --------------------------------------------
 # ROUTES
 # --------------------------------------------
+
+
+ADMIN_PASSWORD = "andimandi"  # 🔒 change this to your own secure password
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    """Admin login page"""
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            return redirect(url_for("admin_dashboard"))
+        else:
+            return render_template("admin_login.html", error="Invalid password!")
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    """Show list of all workspaces"""
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("admin_login"))
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT name, locked FROM workspaces ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    workspaces = [{"workspace_name": r[0], "locked": bool(r[1])} for r in rows]
+    return render_template("workspaces.html", workspaces=workspaces)
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    """Logout admin"""
+    session.pop("admin_logged_in", None)
+    return redirect(url_for("admin_login"))
+
 
 @app.route("/")
 def home():
